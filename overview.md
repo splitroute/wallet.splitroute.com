@@ -8,15 +8,16 @@
 
 1.  **Base URL:** Identify where the API is hosted (e.g., `http://localhost:8000`).
 2.  **Public Info:** Use `GET /accounts/{nano_address}/...` endpoints to view any account's balance, history, etc. No authentication needed.
-3.  **Wallet Actions (Send/Receive/Pay):**
+3.  **Create Wallet:** Use `POST /wallet/create` endpoint to generate a new Nano wallet with seed, private key, and address. Store these credentials securely.
+4.  **Wallet Actions (Send/Receive/Pay):**
     *   Use `POST /wallet/...` and `POST /invoices/pay/...` endpoints.
     *   **CRITICAL:** Authentication requires your **Nano Private Key OR Seed+Index** in HTTP headers (`X-Wallet-Private-Key` **or** `X-Wallet-Seed` + `X-Wallet-Index`). **NEVER expose these in front-end code. Treat them like passwords.** See [Authentication](#authentication-critical-read) section below.
     *   **SEQUENTIAL ACTIONS:** Authenticated operations that modify the wallet state (`send`, `receive_all`, `receive_one`, `pay_invoice`) for a **single account** must be performed **sequentially**. Nano requires blocks to be added one after another. This API enforces this with internal locking. Concurrent requests to modify the same wallet will result in a `429 Too Many Requests` error. Clients should handle this by retrying the request later (see [Error Handling](#error-handling)).
     *   To send, use `POST /wallet/send`. Provide amount as `amount_nano`, `amount_raw`, OR `nominal_amount` + `nominal_currency` (e.g., "EUR", "USD" - this calculates the Nano amount to send based on exchange rates).
     *   To receive pending funds, use `POST /wallet/receive_all`.
     *   To pay a SplitRoute invoice, use `POST /invoices/pay/{invoice_id}`.
-4.  **Check Examples:** See [Use Cases & Examples](#use-cases--examples) for `curl` and Python snippets.
-5.  **Error Handling:** Check HTTP status codes (4xx = client error, 5xx = server error) and the `detail` field in the JSON response body. Pay special attention to the `429` status code for authenticated operations.
+5.  **Check Examples:** See [Use Cases & Examples](#use-cases--examples) for `curl` and Python snippets.
+6.  **Error Handling:** Check HTTP status codes (4xx = client error, 5xx = server error) and the `detail` field in the JSON response body. Pay special attention to the `429` status code for authenticated operations.
 
 ---
 
@@ -45,6 +46,9 @@
 6.  [Error Handling](#error-handling) <--- Includes `429` Explanation
 7.  [Use Cases & Examples](#use-cases--examples)
 8.  [Security Considerations](#security-considerations) <--- Includes Handling `429`
+9.  [Audit Logging and Chain Validation](#audit-logging-and-chain-validation)
+    *   [Audit Log Features](#audit-log-features)
+    *   [Audit Log Format](#audit-log-format)
 
 ---
 
@@ -178,6 +182,22 @@ Endpoints:
 
 ---
 
+### Wallet Creation (Unauthenticated)
+
+*   **Applies to:** `/wallet/create` endpoint.
+*   **Auth:** None.
+
+Endpoints:
+
+*   `POST /wallet/create`
+    *   **Description:** Generate a new Nano wallet seed, private key, and address.
+    *   **Query Param:** `index` (int, optional, default: 0, min: 0) - The derivation index for the key pair.
+    *   **Success:** `200 OK` ([`WalletCreationResponseDto`](#walletcreationresponsedto)).
+    *   **Errors:** `422` (Invalid Index), `500` (Internal Server Error).
+    *   **Security Note:** This endpoint generates wallet credentials entirely on the server side. While convenient, you may prefer to generate your seed locally using a secure random number generator for maximum security.
+
+---
+
 ### Authenticated Wallet Operations
 
 > **Reminder:** These endpoints REQUIRE `X-Wallet-Private-Key` **or** (`X-Wallet-Seed` + `X-Wallet-Index`) headers. See [Authentication](#authentication-critical-read).
@@ -307,6 +327,7 @@ Endpoints:
 *   **`ConversionResponse`**: Response from `GET /exchange/convert`. Includes `from_currency`, `to_currency`, `from_amount`, `to_amount`, `rate` (decimals).
 *   **`InvoiceInfoDto`**: Response from `GET /invoices/{invoice_id}`. Details from external provider: `invoice_id`, `account_address`, `required_amount_raw`/`nano`, `status`, `expires_at`, `paid_at`, `nominal_amount`/`currency` (optional), `is_payable` (boolean indicating if it can be paid now).
 *   **`InvoicePaymentResultDto`**: Response from successful `POST /invoices/pay/...`. Includes `invoice_id`, `nano_block_hash` of the payment transaction, `destination_address`, `amount_nano`/`raw` paid, `timestamp`.
+*   **`WalletCreationResponseDto`**: Response from successful `POST /wallet/create`. Includes `seed` (64-character hex string), `index` (integer), `private_key` (64-character hex string), and `address` (nano_ prefixed address). **Handle this data securely as it gives full access to the wallet.**
 
 ---
 
@@ -327,12 +348,18 @@ The API uses standard HTTP status codes for signalling request outcomes. Always 
 
 ## 7. Use Cases & Examples
 
-*(Examples remain structurally similar but reinforce security and potential 429 handling)*
+*(Examples reinforce security and potential 429 handling)*
 
 **Use Case 1: Display Public Account Info**
 Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to display account details on a public explorer or informational page. No authentication needed.
 
-**Use Case 2: Send 0.5 XNO (Secure Backend Logic)**
+**Use Case 2: Create a New Nano Wallet**
+1. Call `POST /wallet/create` to generate a new wallet seed, private key, and address.
+2. Securely store the returned `seed` and/or `private_key` - this is the only time they will be available.
+3. The returned `address` can be shared to receive funds.
+4. Use the `seed` and `index` or `private_key` with authenticated endpoints when you need to send funds or check account information.
+
+**Use Case 3: Send 0.5 XNO (Secure Backend Logic)**
 1.  Obtain the destination `addr`.
 2.  **Securely** retrieve the user's `private_key` or `seed`/`index` from a trusted store (e.g., encrypted database, environment variables on the server). **NEVER** get this from the user's browser directly for the API call.
 3.  Make a `POST /wallet/send` request from your **backend server** including the correct authentication headers and a body like `{"destination_address": addr, "amount_nano": 0.5}`.
@@ -341,7 +368,7 @@ Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to displ
     *   `429 Too Many Requests`: Another operation was in progress. Wait (e.g., 1-5 seconds) and retry the request. Implement a maximum retry limit.
     *   `4xx/5xx`: Handle other errors appropriately (log, inform user). Check `detail`.
 
-**Use Case 3: Automated Fund Sweeping (Secure Script)**
+**Use Case 4: Automated Fund Sweeping (Secure Script)**
 1.  **Securely** load the `private_key` or `seed`/`index` of the account to sweep *within the script's secure environment*.
 2.  Periodically:
     *   `POST /wallet/receive_all` (with auth headers). Handle potential `429` with retry.
@@ -350,7 +377,7 @@ Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to displ
         *   `POST /wallet/send` (with auth headers) using `amount_raw` set to the full `balance_raw` value, sending to a secure cold storage address. Handle potential `429` with retry. Handle insufficient funds errors (e.g., if a fee applies).
 3.  Schedule script execution securely.
 
-**Use Case 4: Pay an Invoice (Secure Backend Logic)**
+**Use Case 5: Pay an Invoice (Secure Backend Logic)**
 1.  Get the `invoice_id` to be paid.
 2.  `GET /invoices/{invoice_id}` to check status and `is_payable`. If not payable, stop.
 3.  **Securely** retrieve the *payer's* `private_key` or `seed`/`index`.
@@ -367,6 +394,26 @@ Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to displ
 **Get Public Balance (curl):**
 ```bash
 curl http://localhost:8000/accounts/nano_3i1aq1cchnmbn9x5rsbap8b15akfh7wj7pwskuzi7ahz8oq6cobd99d4r3b7/balance
+```
+
+**Create New Wallet (curl):**
+```bash
+curl -X POST http://localhost:8000/wallet/create
+```
+
+Or with a specific index:
+```bash
+curl -X POST "http://localhost:8000/wallet/create?index=5"
+```
+
+Response:
+```json
+{
+    "seed": "D73F1C31061762F139362B943CBB5E0C588F55A1EDB70EBEB31576D5CCA8E136",
+    "index": 0,
+    "private_key": "04C3335FDD43437956A57A21FD0EBC80A04F9AB8686CF4E5F1BC3DD543EFF3DC",
+    "address": "nano_1q7h34aegsjrp94nmo1fcc8jz5jmr9ogj4wc78qy8saasog71e9q6dxqn3nc"
+}
 ```
 
 **Send 0.01 XNO via Private Key (curl - ⚠️ DANGEROUS if key exposed! Use only in secure backend scripts):**
@@ -481,5 +528,45 @@ if retry_count == MAX_RETRIES:
 *   **🔁 HANDLING CONCURRENCY (429):** Client applications making authenticated modifying calls **must** implement logic to handle the `429 Too Many Requests` error. This typically involves retrying the request after a short delay, potentially using exponential backoff and jitter to avoid thundering herd issues.
 *   **🔥 ACCESS CONTROL:** Use firewalls, reverse proxies (like Nginx/Caddy), or cloud provider network security groups to restrict network access to the API server. Only allow connections from trusted IP addresses or networks (e.g., your application backend servers).
 *   **AUDITING:** Consider adding logging (excluding sensitive headers!) to track authenticated operations for security monitoring.
+
+---
+
+## 9. Audit Logging and Chain Validation
+
+The wallet application maintains a secure audit trail of all operations with cryptographic guarantees of integrity. 
+This ensures that any unauthorized modifications to the log can be detected.
+
+### Audit Log Features
+
+- **Per-Account Sequence Numbers**: Each account maintains its own sequence of operations, starting from 1.
+- **Content Hashing**: Each log entry includes a hash of its own content.
+- **Continuous Chain**: The combination of sequence numbers and content hashing creates a verifiable audit chain per account.
+- **Tamper Evidence**: Modifications to log entries or removal of entries can be detected with the validation tool.
+
+### Audit Log Format
+
+Each audit log entry is a JSON object with the following key fields:
+
+```json
+{
+  "timestamp": "2023-06-15T12:34:56.789Z",
+  "level": "INFO",
+  "correlation_id": "123e4567-e89b-12d3-a456-426614174000",
+  "event_type": "SUCCESS",
+  "logger": "wallet_audit",
+  "operation": "SEND_NANO",
+  "wallet_address": "nano_address...",
+  "account_sequence": 42,
+  "request_details": { ... },
+  "outcome_details": { ... },
+  "entry_hash": "sha256_hash_value_of_this_entry"
+}
+```
+
+Key fields for audit chain integrity:
+- `wallet_address`: The account this operation applies to.
+- `account_sequence`: Sequential number unique to this account.
+- `entry_hash`: SHA-256 hash of the log entry content.
+
 
 ---

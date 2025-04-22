@@ -8,8 +8,9 @@ The wallet.splitroute.com API provides a RESTful interface (HTTP/JSON) to intera
 
 *   Check balances and transaction history for any Nano account.
 *   Send and receive Nano using an authenticated wallet.
-*   Send Nano based on nominal fiat values (e.g., send $10 USD worth of Nano).
-*   Interact with and pay SplitRoute invoices directly via the API.
+*   Send Nano based on nominal fiat values (e.g., send $10 USD worth of Nano) (0.5% fee).
+*   Interact with and pay SplitRoute invoices directly via the API for free.
+*   Create new Nano wallets with generated seeds, private keys, and addresses.
 
 **The primary, detailed API documentation can be found here:**
 
@@ -23,6 +24,7 @@ Key endpoint structures include:
 
 *   `/accounts/{nano_address}/...` - Public information for any Nano account.
 *   `/wallet/...` - Authenticated operations for a specific wallet (Requires secure handling of keys/seeds).
+*   `/wallet/create` - Create a new Nano wallet (Non-authenticated endpoint).
 *   `/invoices/...` - Interaction with SplitRoute invoices (fetching info, paying).
 *   `/exchange/...` - Exchange rate information.
 
