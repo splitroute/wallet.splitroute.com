@@ -14,7 +14,7 @@
     *   **CRITICAL:** Authentication requires your **Nano Private Key OR Seed+Index** in HTTP headers (`X-Wallet-Private-Key` **or** `X-Wallet-Seed` + `X-Wallet-Index`). **NEVER expose these in front-end code. Treat them like passwords.** See [Authentication](#authentication-critical-read) section below.
     *   **SEQUENTIAL ACTIONS:** Authenticated operations that modify the wallet state (`send`, `receive_all`, `receive_one`, `pay_invoice`) for a **single account** must be performed **sequentially**. Nano requires blocks to be added one after another. This API enforces this with internal locking. Concurrent requests to modify the same wallet will result in a `429 Too Many Requests` error. Clients should handle this by retrying the request later (see [Error Handling](#error-handling)).
     *   To send, use `POST /wallet/send`. Provide amount as `amount_nano`, `amount_raw`, OR `nominal_amount` + `nominal_currency` (e.g., "EUR", "USD" - this calculates the Nano amount to send based on exchange rates).
-    *   To receive pending funds, use `POST /wallet/receive_all`.
+    *   To receive receivable funds, use `POST /wallet/receive_all`.
     *   To pay a SplitRoute invoice, use `POST /invoices/pay/{invoice_id}`.
 5.  **Check Examples:** See [Use Cases & Examples](#use-cases--examples) for `curl` and Python snippets.
 6.  **Error Handling:** Check HTTP status codes (4xx = client error, 5xx = server error) and the `detail` field in the JSON response body. Pay special attention to the `429` status code for authenticated operations.
@@ -82,7 +82,7 @@ The Nano Wallet API provides a programmatic interface to interact with the Nano 
 
 *   Understanding of basic API concepts (HTTP, JSON).
 *   **For Authenticated Operations:** You MUST have the **Private Key** or **Seed + Index** for the Nano account you wish to control.
-*   **For Sending/Receiving:** The controlled account needs sufficient balance to send or pending blocks to receive.
+*   **For Sending/Receiving:** The controlled account needs sufficient balance to send or receivable blocks to receive.
 *   Understanding that **authenticated actions on a single account must be sequential** (see [Sequential Operations & Concurrency](#sequential-operations--concurrency)).
 
 ### API Endpoint Base URL
@@ -162,7 +162,7 @@ All requests are made relative to the API's deployment URL (e.g., `http://localh
 Endpoints:
 
 *   `GET /accounts/{account_address}/balance`
-    *   **Description:** Get confirmed and pending balance for any account.
+    *   **Description:** Get confirmed and receivable balance for any account.
     *   **Success:** `200 OK` ([`AccountBalanceDto`](#accountbalancedto)).
     *   **Errors:** `400` (Bad Address Format), `503` (RPC Error).
 *   `GET /accounts/{account_address}/history`
@@ -175,7 +175,7 @@ Endpoints:
     *   **Success:** `200 OK` ([`AccountInfoDto`](#accountinfodto)).
     *   **Errors:** `400` (Bad Address), `503` (RPC Error).
 *   `GET /accounts/{account_address}/receivable`
-    *   **Description:** List pending incoming blocks for any account.
+    *   **Description:** List receivable incoming blocks for any account.
     *   **Query Param:** `threshold` (string, optional) - Minimum raw amount to list (e.g., `"1000000000000000000000000"`).
     *   **Success:** `200 OK` ([`AccountReceivableDto`](#accountreceivabledto)).
     *   **Errors:** `400` (Bad Address/Threshold Format), `422` (Invalid Threshold Value), `503` (RPC Error).
@@ -222,7 +222,7 @@ Endpoints:
     *   **Success:** `200 OK` ([`AccountInfoDto`](#accountinfodto)).
     *   **Errors:** `401` (Auth), `503` (RPC Error).
 *   `GET /wallet/receivable`
-    *   **Description:** Get *your* authenticated wallet's pending blocks. (Read-only, no 429 concurrency error).
+    *   **Description:** Get *your* authenticated wallet's receivable blocks. (Read-only, no 429 concurrency error).
     *   **Query Param:** `threshold` (string, optional) - Min raw amount.
     *   **Success:** `200 OK` ([`AccountReceivableDto`](#accountreceivabledto)).
     *   **Errors:** `400` (Bad Threshold Format), `401` (Auth), `422` (Invalid Threshold Value), `503` (RPC Error).
@@ -245,14 +245,14 @@ Endpoints:
 > *   **Balance Requirement:** Your authenticated wallet **must have sufficient balance to cover BOTH the intended send amount AND the calculated service fee.** The total amount debited will be `intended_send_amount + fee_amount`. The `PaymentResultDto` response includes fee details.
 
 *   `POST /wallet/receive_all`
-    *   **Description:** Accept (receive) all pending funds for *your* authenticated wallet. Creates one `receive` block per pending `send`. **This is a modifying operation subject to locking.**
+    *   **Description:** Accept (receive) all receivable funds for *your* authenticated wallet. Creates one `receive` block per receivable `send`. **This is a modifying operation subject to locking.**
     *   **Success:** `200 OK` (`List[`[`ReceiveResultDto`](#receiveresultdto)`)`). Returns an empty list `[]` if no blocks were receivable.
     *   **Errors:**
         *   `401` (Auth Error)
         *   `429 Too Many Requests` (Another operation is already in progress for this wallet. Retry later.)
         *   `503` (RPC Error)
 *   `POST /wallet/receive_one/{block_hash}`
-    *   **Description:** Accept (receive) a *specific* pending block for *your* wallet. **This is a modifying operation subject to locking.**
+    *   **Description:** Accept (receive) a *specific* receivable block for *your* wallet. **This is a modifying operation subject to locking.**
     *   **Path Param:** `block_hash` (string) - The 64-character hex hash of the incoming `send` block.
     *   **Success:** `200 OK` ([`ReceiveResultDto`](#receiveresultdto)).
     *   **Errors:**
@@ -314,12 +314,12 @@ Endpoints:
 
 *(Descriptions of the main JSON structures used. Refer to `src/application/dto/*.py` files for full field details, types, and validation rules.)*
 
-*   **`AccountBalanceDto`**: Contains wallet balance. `balance_raw`, `pending_raw` (strings), `balance_nano`, `pending_nano` (decimals).
+*   **`AccountBalanceDto`**: Contains wallet balance. `balance_raw`, `receivable_raw` (strings), `balance_nano`, `receivable_nano` (decimals).
 *   **`TransactionDto`**: Represents one block/transaction in history. Includes `type`, `account`, `amount_raw`/`nano`, `hash`, `timestamp`, `confirmed`, `link`, etc.
 *   **`AccountHistoryDto`**: Contains `account` address and a `history` list of `TransactionDto`. May include `previous` hash for pagination (if implemented).
 *   **`AccountInfoDto`**: Detailed ledger state: `frontier_block` hash, `open_block` hash, `balance_raw`/`nano`, `block_count`, `representative`, `modified_timestamp`, etc.
-*   **`ReceivableBlockDto`**: Info about one pending block: `hash`, `amount_raw`/`nano`.
-*   **`AccountReceivableDto`**: Contains a `blocks` dictionary mapping pending block hashes (string) to `ReceivableBlockDto`.
+*   **`ReceivableBlockDto`**: Info about one receivable block: `hash`, `amount_raw`/`nano`.
+*   **`AccountReceivableDto`**: Contains a `blocks` dictionary mapping receivable block hashes (string) to `ReceivableBlockDto`.
 *   **`SendPaymentRequestDto`**: Used for `POST /wallet/send`. Requires `destination_address` and **exactly one** amount specification: `amount_nano` (decimal > 0), `amount_raw` (string, > "0"), or (`nominal_amount` (decimal > 0) + `nominal_currency` (string, e.g., "EUR", "USD")). Strict validation is applied.
 *   **`PaymentResultDto`**: Response from successful `POST /wallet/send`. Includes `block_hash`, `sent_amount_raw`/`nano`, `destination_address`, plus `fee_amount_raw`/`nano` detailing the service fee applied (if any).
 *   **`ReceiveResultDto`**: Response from successful `POST /wallet/receive_all` (list item) or `receive_one`. Includes `block_hash` (of the created receive block), `received_amount_raw`/`nano`, `source_address` (of the original send block), `confirmed` status.
