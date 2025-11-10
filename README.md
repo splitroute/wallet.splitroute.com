@@ -24,13 +24,16 @@ Key endpoint structures include:
 
 *   `/accounts/{nano_address}/...` - Public information for any Nano account.
 *   `/wallet/...` - Authenticated operations for a specific wallet (Requires secure handling of keys/seeds).
-*   `/wallet/create` - Create a new Nano wallet (Non-authenticated endpoint).
-*   `/invoices/...` - Interaction with SplitRoute invoices (fetching info, paying).
+*   `/wallets` - Collection endpoint to generate new wallets (unauthenticated).
+*   `/transactions/...` - Public unsigned transaction helpers (prepare + submit flows tied to `X-API-Address` header).
+*   `/invoices/...` - Interaction with SplitRoute invoices (fetching info, estimations, paying).
 *   `/exchange/...` - Exchange rate information.
+
+> **Naming convention:** Singular nouns (e.g., `/wallet`, `/invoice`) denote operations on one authenticated resource, while plural nouns (e.g., `/wallets`, `/transactions`) denote collection-style or multi-entity helpers. The API intentionally keeps both `/wallet` and `/wallets` because they solve different problems—keep this distinction in mind when calling the endpoints.
 
 ## ⚠️ Security Warning
 
-**CRITICAL:** Authenticated endpoints (`/wallet/*`, `/invoices/pay/*`) require your **Nano Private Key** or **Seed + Index** to be sent directly in HTTP headers (`X-Wallet-Private-Key` or `X-Wallet-Seed` / `X-Wallet-Index`).
+**CRITICAL:** Authenticated endpoints (`/wallet/*`, `/invoices/{invoice_id}/pay`) require your **Nano Private Key** or **Seed + Index** to be sent directly in HTTP headers (`X-Wallet-Private-Key` or `X-Wallet-Seed` / `X-Wallet-Index`).
 
 *   **These credentials grant FULL CONTROL over your funds.**
 *   **NEVER expose these credentials in frontend code** (browsers, mobile apps). An attacker could easily steal them.

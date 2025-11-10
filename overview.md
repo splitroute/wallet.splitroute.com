@@ -8,47 +8,53 @@
 
 1.  **Base URL:** Identify where the API is hosted (e.g., `http://localhost:8000`).
 2.  **Public Info:** Use `GET /accounts/{nano_address}/...` endpoints to view any account's balance, history, etc. No authentication needed.
-3.  **Create Wallet:** Use `POST /wallet/create` endpoint to generate a new Nano wallet with seed, private key, and address. Store these credentials securely.
+3.  **Create Wallet:** Use `POST /wallets` endpoint to generate a new Nano wallet with seed, private key, and address. Store these credentials securely.
 4.  **Wallet Actions (Send/Receive/Pay):**
-    *   Use `POST /wallet/...` and `POST /invoices/pay/...` endpoints.
+    *   Use `POST /wallet/...` and `POST /invoices/{invoice_id}/pay` endpoints.
     *   **CRITICAL:** Authentication requires your **Nano Private Key OR Seed+Index** in HTTP headers (`X-Wallet-Private-Key` **or** `X-Wallet-Seed` + `X-Wallet-Index`). **NEVER expose these in front-end code. Treat them like passwords.** See [Authentication](#authentication-critical-read) section below.
-    *   **SEQUENTIAL ACTIONS:** Authenticated operations that modify the wallet state (`send`, `receive_all`, `receive_one`, `pay_invoice`) for a **single account** must be performed **sequentially**. Nano requires blocks to be added one after another. This API enforces this with internal locking. Concurrent requests to modify the same wallet will result in a `429 Too Many Requests` error. Clients should handle this by retrying the request later (see [Error Handling](#error-handling)).
-    *   To send, use `POST /wallet/send`. Provide amount as `amount_nano`, `amount_raw`, OR `nominal_amount` + `nominal_currency` (e.g., "EUR", "USD" - this calculates the Nano amount to send based on exchange rates).
-    *   To receive receivable funds, use `POST /wallet/receive_all`.
-    *   To pay a SplitRoute invoice, use `POST /invoices/pay/{invoice_id}`.
+    *   **SEQUENTIAL ACTIONS:** Authenticated operations that modify the wallet state (`send`, `receivables/receive`, `receivables/{block_hash}/receive`, `pay_invoice`) for a **single account** must be performed **sequentially**. Nano requires blocks to be added one after another. This API enforces this with internal locking. Concurrent requests to modify the same wallet will result in a `429 Too Many Requests` error. Clients should handle this by retrying the request later (see [Error Handling](#error-handling)).
+    *   To send, use `POST /wallet/send`. Provide `amount` (as a string) and `currency` (e.g., `"NANO"`, `"RAW"`, `"EUR"`). Fiat values are converted to Nano automatically using the current exchange rate.
+    *   To receive all pending funds, use `POST /wallet/receivables/receive`.
+    *   To receive a specific block, use `POST /wallet/receivables/{block_hash}/receive`.
+    *   To pay a SplitRoute invoice, use `POST /invoices/{invoice_id}/pay`.
 5.  **Check Examples:** See [Use Cases & Examples](#use-cases--examples) for `curl` and Python snippets.
 6.  **Error Handling:** Check HTTP status codes (4xx = client error, 5xx = server error) and the `detail` field in the JSON response body. Pay special attention to the `429` status code for authenticated operations.
+
+> **Endpoint naming convention:** Singular nouns (e.g., `/wallet`, `/invoice`) modify one authenticated resource, while plural nouns (e.g., `/wallets`, `/transactions`) expose collection or helper endpoints. Keep this distinction in mind so you reach the intended router.
 
 ---
 
 ## Table of Contents
 
-1.  [Overview](#overview)
-    *   [What is this API?](#what-is-this-api)
-    *   [Target Audience](#target-audience)
-    *   [Key Features](#key-features)
-2.  [Getting Started](#getting-started)
-    *   [Prerequisites](#prerequisites)
-    *   [API Endpoint Base URL](#api-endpoint-base-url)
-    *   [**Authentication (CRITICAL READ)**](#authentication-critical-read) <--- **⚠️ READ THIS CAREFULLY! ⚠️**
-3.  [Core Concepts](#core-concepts)
-    *   [Nano vs. Raw Units](#nano-vs-raw-units)
-    *   [Private Keys, Seeds, and Indices](#private-keys-seeds-and-indices)
-    *   [Accounts and Blocks](#accounts-and-blocks)
-    *   [**Sequential Operations & Concurrency**](#sequential-operations--concurrency) <--- **IMPORTANT**
-4.  [API Reference](#api-reference)
-    *   [Health Check](#health-check)
-    *   [Public Account Information](#public-account-information)
-    *   [Authenticated Wallet Operations](#authenticated-wallet-operations) <--- Requires Special Headers & Sequential Execution
-    *   [Exchange Rate Information](#exchange-rate-information)
-    *   [SplitRoute Invoices](#external-invoices-splitroute)
-5.  [Data Types (DTOs)](#data-types-dtos)
-6.  [Error Handling](#error-handling) <--- Includes `429` Explanation
-7.  [Use Cases & Examples](#use-cases--examples)
-8.  [Security Considerations](#security-considerations) <--- Includes Handling `429`
-9.  [Audit Logging and Chain Validation](#audit-logging-and-chain-validation)
-    *   [Audit Log Features](#audit-log-features)
-    *   [Audit Log Format](#audit-log-format)
+- [Table of Contents](#table-of-contents)
+- [1. Overview](#1-overview)
+  - [What is this API?](#what-is-this-api)
+  - [Target Audience](#target-audience)
+  - [Key Features](#key-features)
+- [2. Getting Started](#2-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [API Endpoint Base URL](#api-endpoint-base-url)
+  - [**Authentication (CRITICAL READ)**](#authentication-critical-read)
+- [3. Core Concepts](#3-core-concepts)
+  - [Nano vs. Raw Units](#nano-vs-raw-units)
+  - [Private Keys, Seeds, and Indices](#private-keys-seeds-and-indices)
+  - [Accounts and Blocks](#accounts-and-blocks)
+  - [**Sequential Operations \& Concurrency**](#sequential-operations--concurrency)
+- [4. API Reference](#4-api-reference)
+  - [Health Check](#health-check)
+  - [Public Account Information](#public-account-information)
+  - [Wallet Creation (Unauthenticated)](#wallet-creation-unauthenticated)
+  - [Authenticated Wallet Operations](#authenticated-wallet-operations)
+  - [Unsigned Transactions (Offline Signing)](#unsigned-transactions-offline-signing)
+  - [Exchange Rate Information](#exchange-rate-information)
+  - [External Invoices (SplitRoute)](#external-invoices-splitroute)
+- [5. Data Types (DTOs)](#5-data-types-dtos)
+- [6. Error Handling](#6-error-handling)
+- [7. Use Cases \& Examples](#7-use-cases--examples)
+- [8. Security Considerations](#8-security-considerations)
+- [9. Audit Logging and Chain Validation](#9-audit-logging-and-chain-validation)
+  - [Audit Log Features](#audit-log-features)
+  - [Audit Log Format](#audit-log-format)
 
 ---
 
@@ -94,7 +100,7 @@ All requests are made relative to the API's deployment URL (e.g., `http://localh
 > **🚨☠️ EXTREMELY IMPORTANT WARNING ☠️🚨**
 >
 > *   This API **DOES NOT USE** standard API keys for protected actions.
-> *   Authentication for endpoints like `/wallet/*` and `/invoices/pay/*` is done by providing your actual **NANO PRIVATE KEY** or **NANO SEED + INDEX** directly in HTTP headers.
+> *   Authentication for endpoints like `/wallet/*` and `/invoices/{invoice_id}/pay` is done by providing your actual **NANO PRIVATE KEY** or **NANO SEED + INDEX** directly in HTTP headers.
 > *   **THIS MEANS THESE HEADERS GIVE FULL, IRREVOCABLE CONTROL OVER YOUR NANO FUNDS.**
 > *   **NEVER** put these headers in client-side code (e.g., Browser JavaScript, mobile apps). An attacker could easily steal them.
 > *   **ONLY** make authenticated calls from a **SECURE BACKEND ENVIRONMENT** that you fully control and trust.
@@ -136,7 +142,7 @@ All requests are made relative to the API's deployment URL (e.g., `http://localh
 ### **Sequential Operations & Concurrency**
 
 *   **Nano Requirement:** The Nano protocol requires that blocks for a **single account** are added strictly **sequentially**. Each new block must reference the hash of the *previous* block on that account's chain. Trying to create multiple blocks simultaneously for the same account (e.g., two sends, or a send and a receive) will cause conflicts or errors (often called forks at the network level).
-*   **API Enforcement:** To prevent these issues, this API implements **internal locking** for authenticated operations that modify the wallet state (`/wallet/send`, `/wallet/receive_all`, `/wallet/receive_one`, `/invoices/pay/*`).
+*   **API Enforcement:** To prevent these issues, this API implements **internal locking** for authenticated operations that modify the wallet state (`/wallet/send`, `/wallet/receivables/receive`, `/wallet/receivables/{block_hash}/receive`, `/invoices/{invoice_id}/pay`).
 *   **`429 Too Many Requests`:** If you attempt to start a modifying operation on an authenticated wallet while another one is already in progress *for that same wallet* (identified by the private key or seed/index), the API will immediately return an `HTTP 429 Too Many Requests` error.
 *   **Client Handling:** Your application **must** be prepared to handle the `429` error when making authenticated calls. The recommended approach is to wait briefly and then retry the operation (potentially using an exponential backoff strategy). Read-only operations (`GET /wallet/*`) do not require locking and are not subject to the `429` error for concurrency reasons.
 
@@ -184,17 +190,19 @@ Endpoints:
 
 ### Wallet Creation (Unauthenticated)
 
-*   **Applies to:** `/wallet/create` endpoint.
+*   **Applies to:** `/wallets` endpoint.
 *   **Auth:** None.
 
 Endpoints:
 
-*   `POST /wallet/create`
+*   `POST /wallets`
     *   **Description:** Generate a new Nano wallet seed, private key, and address.
     *   **Query Param:** `index` (int, optional, default: 0, min: 0) - The derivation index for the key pair.
     *   **Success:** `200 OK` ([`WalletCreationResponseDto`](#walletcreationresponsedto)).
     *   **Errors:** `422` (Invalid Index), `500` (Internal Server Error).
     *   **Security Note:** This endpoint generates wallet credentials entirely on the server side. While convenient, you may prefer to generate your seed locally using a secure random number generator for maximum security.
+
+*Naming reminder:* `/wallets` stays plural because it is a collection factory for new credentials, whereas `/wallet/*` (below) operates on *your* single authenticated wallet derived from the headers.
 
 ---
 
@@ -221,13 +229,18 @@ Endpoints:
     *   **Description:** Get *your* authenticated wallet account info. (Read-only, no 429 concurrency error).
     *   **Success:** `200 OK` ([`AccountInfoDto`](#accountinfodto)).
     *   **Errors:** `401` (Auth), `503` (RPC Error).
-*   `GET /wallet/receivable`
+*   `GET /wallet/receivables`
     *   **Description:** Get *your* authenticated wallet's receivable blocks. (Read-only, no 429 concurrency error).
     *   **Query Param:** `threshold` (string, optional) - Min raw amount.
     *   **Success:** `200 OK` ([`AccountReceivableDto`](#accountreceivabledto)).
     *   **Errors:** `400` (Bad Threshold Format), `401` (Auth), `422` (Invalid Threshold Value), `503` (RPC Error).
+*   `POST /wallet/send/payment-estimation`
+    *   **Description:** Read-only preview of the total debit (destination amount + service fee) that would be required for a send. **Does not submit a block and is not subject to locking.**
+    *   **Request Body:** [`SendPaymentRequestDto`](#sendpaymentrequestdto)
+    *   **Success:** `200 OK` ([`SendEstimationResponseDto`](#sendestimationresponsedto)).
+    *   **Errors:** `400` (Validation), `401` (Auth Error), `422` (Invalid Body), `503` (RPC/Exchange Error).
 *   `POST /wallet/send`
-    *   **Description:** Send Nano from *your* authenticated wallet. Specify amount in **one** way: `amount_nano`, `amount_raw`, or (`nominal_amount` + `nominal_currency`). Providing nominal amount triggers calculation based on current exchange rates/depth. **This is a modifying operation subject to locking.**
+    *   **Description:** Send Nano from *your* authenticated wallet. Provide `amount` and `currency`. Supported currencies include `NANO`, `RAW`, and configured fiat currencies (e.g., `USD`, `EUR`). Fiat inputs are converted to Nano using the latest exchange rates. **This is a modifying operation subject to locking.**
     *   **Request Body:** [`SendPaymentRequestDto`](#sendpaymentrequestdto)
     *   **Success:** `200 OK` ([`PaymentResultDto`](#paymentresultdto)).
     *   **Errors:**
@@ -244,14 +257,14 @@ Endpoints:
 > *   **Example:** If sending 1 XNO and fee is 0.5%, an additional 0.005 XNO is required.
 > *   **Balance Requirement:** Your authenticated wallet **must have sufficient balance to cover BOTH the intended send amount AND the calculated service fee.** The total amount debited will be `intended_send_amount + fee_amount`. The `PaymentResultDto` response includes fee details.
 
-*   `POST /wallet/receive_all`
+*   `POST /wallet/receivables/receive`
     *   **Description:** Accept (receive) all receivable funds for *your* authenticated wallet. Creates one `receive` block per receivable `send`. **This is a modifying operation subject to locking.**
     *   **Success:** `200 OK` (`List[`[`ReceiveResultDto`](#receiveresultdto)`)`). Returns an empty list `[]` if no blocks were receivable.
     *   **Errors:**
         *   `401` (Auth Error)
         *   `429 Too Many Requests` (Another operation is already in progress for this wallet. Retry later.)
         *   `503` (RPC Error)
-*   `POST /wallet/receive_one/{block_hash}`
+*   `POST /wallet/receivables/{block_hash}/receive`
     *   **Description:** Accept (receive) a *specific* receivable block for *your* wallet. **This is a modifying operation subject to locking.**
     *   **Path Param:** `block_hash` (string) - The 64-character hex hash of the incoming `send` block.
     *   **Success:** `200 OK` ([`ReceiveResultDto`](#receiveresultdto)).
@@ -260,6 +273,37 @@ Endpoints:
         *   `404` (Block hash not found or not receivable for this account)
         *   `429 Too Many Requests` (Another operation is already in progress for this wallet. Retry later.)
         *   `503` (RPC Error)
+*   `POST /wallet/sweep`
+    *   **Description:** Sweep the entire confirmed balance from *your* authenticated wallet to a destination account in a single operation (includes service fee handling). **This is a modifying operation subject to locking.**
+    *   **Request Body:** [`SweepWalletRequestDto`](#sweepwalletrequestdto)
+    *   **Success:** `200 OK` ([`PaymentResultDto`](#paymentresultdto)).
+    *   **Errors:**
+        *   `400` (Bad Request/Validation - e.g., invalid destination address)
+        *   `401` (Auth Error)
+        *   `429 Too Many Requests` (Another operation is already in progress for this wallet. Retry later.)
+        *   `503` (RPC Error, Insufficient Funds)
+
+---
+
+### Unsigned Transactions (Offline Signing)
+
+*   **Applies to:** `/transactions/*` endpoints. Useful when you cannot share private keys with the API but still want to leverage its node connectivity.
+*   **Auth:** Requires the public `X-API-Address` header (enforced on the router). No private key/seed headers are sent.
+
+Endpoints:
+
+*   `POST /transactions/prepare`
+    *   **Description:** Generate an unsigned send block skeleton (hash to sign, previous block, representative, etc.) for the account specified in `X-API-Address`. Meant to be signed offline.
+    *   **Headers:** `X-API-Address` (sender nano address).
+    *   **Request Body:** [`PrepareSendRequestDto`](#preparesendrequestdto) containing `destination_address` and `amount_raw`.
+    *   **Success:** `201 Created` ([`UnsignedBlockDetailsDto`](#unsignedblockdetailsdto)).
+    *   **Errors:** `400` (Validation), `401/422` (Missing or invalid `X-API-Address`), `503` (RPC/Service Error).
+*   `POST /transactions/submit`
+    *   **Description:** Submit a previously prepared block after you have signed it offline. Broadcasts the signed block to the network.
+    *   **Headers:** `X-API-Address` (must match the signer).
+    *   **Request Body:** [`SubmitSignedRequestDto`](#submitsignedrequestdto) containing the `hash_to_sign` and signature.
+    *   **Success:** `200 OK` ([`SubmitSignedResponseDto`](#submitsignedresponsedto)).
+    *   **Errors:** `400` (Validation), `401/422` (Missing or invalid `X-API-Address`), `404` (Unknown prepare reference), `409` (Block already processed/fork), `503` (RPC/Service Error).
 
 ---
 
@@ -291,12 +335,18 @@ Endpoints:
 Endpoints:
 
 *   `GET /invoices/{invoice_id}`
-    *   **Description:** Get details for a specific SplitRoute invoices.
+    *   **Description:** Get details for a specific SplitRoute invoice.
     *   **Auth:** None (API uses its own provider key if configured).
     *   **Path Param:** `invoice_id` (string).
     *   **Success:** `200 OK` ([`InvoiceInfoDto`](#invoiceinfodto)).
     *   **Errors:** `400` (Bad ID Format), `404` (Invoice Not Found), `503` (External Provider API Error).
-*   `POST /invoices/pay/{invoice_id}`
+*   `GET /invoices/{invoice_id}/payment-estimation`
+    *   **Description:** Calculate the debit + fee required to settle the invoice with the authenticated wallet headers. Helpful for previews before committing to `pay`.
+    *   **Auth:** Required (`X-Wallet-...` headers) to determine the paying wallet context and applicable fees.
+    *   **Path Param:** `invoice_id` (string).
+    *   **Success:** `200 OK` ([`InvoicePaymentEstimationDto`](#invoicepaymentestimationdto)).
+    *   **Errors:** `400` (Bad Invoice ID or validation error), `401` (Auth Error), `404` (Invoice Not Found), `503` (Invoice Estimation/Service Error).
+*   `POST /invoices/{invoice_id}/pay`
     *   **Description:** Pay a SplitRoute invoice using *your* authenticated Nano wallet. Fetches invoice details (amount/address) and attempts payment via `/wallet/send`. **This is a modifying operation subject to locking on the PAYING wallet.**
     *   **Auth:** Required (for the *paying* wallet, using `X-Wallet-...` headers).
     *   **Path Param:** `invoice_id` (string).
@@ -320,14 +370,21 @@ Endpoints:
 *   **`AccountInfoDto`**: Detailed ledger state: `frontier_block` hash, `open_block` hash, `balance_raw`/`nano`, `block_count`, `representative`, `modified_timestamp`, etc.
 *   **`ReceivableBlockDto`**: Info about one receivable block: `hash`, `amount_raw`/`nano`.
 *   **`AccountReceivableDto`**: Contains a `blocks` dictionary mapping receivable block hashes (string) to `ReceivableBlockDto`.
-*   **`SendPaymentRequestDto`**: Used for `POST /wallet/send`. Requires `destination_address` and **exactly one** amount specification: `amount_nano` (decimal > 0), `amount_raw` (string, > "0"), or (`nominal_amount` (decimal > 0) + `nominal_currency` (string, e.g., "EUR", "USD")). Strict validation is applied.
+*   **`SendPaymentRequestDto`**: Used for `POST /wallet/send`. Requires `destination_address`, `amount` (string-serialised number), and `currency` (string). Use `currency="NANO"` for decimal Nano amounts, `currency="RAW"` for integer raw strings, or a supported fiat currency (e.g., `"USD"`, `"EUR"`) for automatic conversion. Aliases such as `"XNO"` (Nano) and `"NANO_RAW"` / `"XNO_RAW"` (raw) are also accepted. Strict validation is applied for each currency type.
 *   **`PaymentResultDto`**: Response from successful `POST /wallet/send`. Includes `block_hash`, `sent_amount_raw`/`nano`, `destination_address`, plus `fee_amount_raw`/`nano` detailing the service fee applied (if any).
-*   **`ReceiveResultDto`**: Response from successful `POST /wallet/receive_all` (list item) or `receive_one`. Includes `block_hash` (of the created receive block), `received_amount_raw`/`nano`, `source_address` (of the original send block), `confirmed` status.
+*   **`SendEstimationResponseDto`**: Response from `POST /wallet/send/payment-estimation`. Includes `destination_amount_raw`/`nano`, `fee_amount_raw`/`nano`, and `total_debit_raw`/`nano` to describe what would be required to execute the send.
+*   **`SweepWalletRequestDto`**: Request body for `POST /wallet/sweep`. Contains `destination_address` for the sweep target.
+*   **`ReceiveResultDto`**: Response from successful `POST /wallet/receivables/receive` (list item) or `POST /wallet/receivables/{block_hash}/receive`. Includes `block_hash` (of the created receive block), `received_amount_raw`/`nano`, `source_address` (of the original send block), `confirmed` status.
 *   **`ExchangeRateResponse`**: Response from `GET /exchange/rate/...`. Includes `base_currency` ("XNO"), `quote_currency`, `rate` (decimal).
 *   **`ConversionResponse`**: Response from `GET /exchange/convert`. Includes `from_currency`, `to_currency`, `from_amount`, `to_amount`, `rate` (decimals).
 *   **`InvoiceInfoDto`**: Response from `GET /invoices/{invoice_id}`. Details from external provider: `invoice_id`, `account_address`, `required_amount_raw`/`nano`, `status`, `expires_at`, `paid_at`, `nominal_amount`/`currency` (optional), `is_payable` (boolean indicating if it can be paid now).
-*   **`InvoicePaymentResultDto`**: Response from successful `POST /invoices/pay/...`. Includes `invoice_id`, `nano_block_hash` of the payment transaction, `destination_address`, `amount_nano`/`raw` paid, `timestamp`.
-*   **`WalletCreationResponseDto`**: Response from successful `POST /wallet/create`. Includes `seed` (64-character hex string), `index` (integer), `private_key` (64-character hex string), and `address` (nano_ prefixed address). **Handle this data securely as it gives full access to the wallet.**
+*   **`InvoicePaymentEstimationDto`**: Response from `GET /invoices/{invoice_id}/payment-estimation`. Mirrors the send estimation fields but adds invoice metadata (e.g., `invoice_id`, `required_amount_raw`, `service_fee_raw`, `total_debit_raw`).
+*   **`InvoicePaymentResultDto`**: Response from successful `POST /invoices/{invoice_id}/pay`. Includes `invoice_id`, `nano_block_hash` of the payment transaction, `destination_address`, `amount_nano`/`raw` paid, `timestamp`.
+*   **`WalletCreationResponseDto`**: Response from successful `POST /wallets`. Includes `seed` (64-character hex string), `index` (integer), `private_key` (64-character hex string), and `address` (nano_ prefixed address). **Handle this data securely as it gives full access to the wallet.**
+*   **`PrepareSendRequestDto`**: Request body for `POST /transactions/prepare`. Includes `destination_address` and `amount_raw` (string) that should be sent once the offline signing flow completes.
+*   **`UnsignedBlockDetailsDto`**: Response from `POST /transactions/prepare`. Contains the derived `hash_to_sign`, `previous`, `representative`, `balance_raw`, and other ledger metadata required to build a valid block offline.
+*   **`SubmitSignedRequestDto`**: Request body for `POST /transactions/submit`. Contains the `hash_to_sign` (matching the prepare call) and the `signature` produced offline.
+*   **`SubmitSignedResponseDto`**: Response from `POST /transactions/submit`. Includes the final `block_hash` accepted by the node and any additional metadata the handler returns.
 
 ---
 
@@ -338,9 +395,9 @@ The API uses standard HTTP status codes for signalling request outcomes. Always 
 *   **`200 OK`**: Success. The request was processed successfully.
 *   **`400 Bad Request`**: General client-side error. The request was malformed or contained invalid data that prevents processing. Examples: invalid Nano address format, invalid threshold format, attempting to pay an unpayable invoice (e.g., expired). Check the `detail` field for specifics.
 *   **`401 Unauthorized`**: Authentication failed. Missing, invalid, or incorrectly formatted `X-Wallet-Private-Key` or `X-Wallet-Seed`/`X-Wallet-Index` headers were provided for a protected endpoint.
-*   **`404 Not Found`**: The requested resource does not exist. Examples: `GET /invoices/{non_existent_id}`, `POST /wallet/receive_one/{unknown_hash}`.
+*   **`404 Not Found`**: The requested resource does not exist. Examples: `GET /invoices/{non_existent_id}`, `POST /wallet/receivables/{unknown_hash}/receive`.
 *   **`422 Unprocessable Entity`**: The request structure was syntactically correct JSON, but the *values* failed validation rules defined by the API (often in the DTOs). Examples: missing required fields in the request body, providing a negative amount, invalid enum value, providing multiple amount types in `/wallet/send`. The `detail` field usually contains a list of specific validation errors.
-*   **`429 Too Many Requests`**: **Concurrency Limit Hit.** This status code is returned specifically for authenticated *modifying* operations (`POST /wallet/send`, `receive_all`, `receive_one`, `POST /invoices/pay/...`) when another such operation is already executing *for the same wallet*. This is due to the API enforcing sequential block creation required by Nano. **Clients MUST handle this by waiting and retrying the request later**, potentially using exponential backoff.
+*   **`429 Too Many Requests`**: **Concurrency Limit Hit.** This status code is returned specifically for authenticated *modifying* operations (`POST /wallet/send`, `POST /wallet/receivables/receive`, `POST /wallet/receivables/{block_hash}/receive`, `POST /invoices/{invoice_id}/pay`) when another such operation is already executing *for the same wallet*. This is due to the API enforcing sequential block creation required by Nano. **Clients MUST handle this by waiting and retrying the request later**, potentially using exponential backoff.
 *   **`500 Internal Server Error`**: An unexpected error occurred on the server side that wasn't handled more specifically. This usually indicates a bug or configuration issue within the API itself. Check server logs.
 *   **`503 Service Unavailable`**: A downstream dependency required to fulfill the request failed or is unavailable. This could be the Nano Node (RPC error), the configured exchange rate provider (e.g., Kraken API error), or SplitRoute API error. The `detail` field might provide more context, such as "Insufficient funds" reported by the Nano node during a send attempt, or "Exchange service error".
 
@@ -354,7 +411,7 @@ The API uses standard HTTP status codes for signalling request outcomes. Always 
 Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to display account details on a public explorer or informational page. No authentication needed.
 
 **Use Case 2: Create a New Nano Wallet**
-1. Call `POST /wallet/create` to generate a new wallet seed, private key, and address.
+1. Call `POST /wallets` to generate a new wallet seed, private key, and address.
 2. Securely store the returned `seed` and/or `private_key` - this is the only time they will be available.
 3. The returned `address` can be shared to receive funds.
 4. Use the `seed` and `index` or `private_key` with authenticated endpoints when you need to send funds or check account information.
@@ -362,7 +419,7 @@ Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to displ
 **Use Case 3: Send 0.5 XNO (Secure Backend Logic)**
 1.  Obtain the destination `addr`.
 2.  **Securely** retrieve the user's `private_key` or `seed`/`index` from a trusted store (e.g., encrypted database, environment variables on the server). **NEVER** get this from the user's browser directly for the API call.
-3.  Make a `POST /wallet/send` request from your **backend server** including the correct authentication headers and a body like `{"destination_address": addr, "amount_nano": 0.5}`.
+3.  Make a `POST /wallet/send` request from your **backend server** including the correct authentication headers and a body like `{"destination_address": addr, "amount": "0.5", "currency": "NANO"}`.
 4.  **Handle the response:**
     *   `200 OK`: Payment sent successfully. Record the `block_hash` from the response.
     *   `429 Too Many Requests`: Another operation was in progress. Wait (e.g., 1-5 seconds) and retry the request. Implement a maximum retry limit.
@@ -371,17 +428,17 @@ Fetch `GET /accounts/{addr}/balance` and `GET /accounts/{addr}/history` to displ
 **Use Case 4: Automated Fund Sweeping (Secure Script)**
 1.  **Securely** load the `private_key` or `seed`/`index` of the account to sweep *within the script's secure environment*.
 2.  Periodically:
-    *   `POST /wallet/receive_all` (with auth headers). Handle potential `429` with retry.
+    *   `POST /wallet/receivables/receive` (with auth headers). Handle potential `429` with retry.
     *   `GET /wallet/balance` (with auth headers).
     *   If `balance_raw` > "0":
-        *   `POST /wallet/send` (with auth headers) using `amount_raw` set to the full `balance_raw` value, sending to a secure cold storage address. Handle potential `429` with retry. Handle insufficient funds errors (e.g., if a fee applies).
+        *   `POST /wallet/sweep` (with auth headers) to move the entire balance to a secure cold storage address, or use `POST /wallet/send` with an explicit amount. Handle potential `429` with retry and check for insufficient funds (e.g., if fees apply).
 3.  Schedule script execution securely.
 
 **Use Case 5: Pay an Invoice (Secure Backend Logic)**
 1.  Get the `invoice_id` to be paid.
 2.  `GET /invoices/{invoice_id}` to check status and `is_payable`. If not payable, stop.
 3.  **Securely** retrieve the *payer's* `private_key` or `seed`/`index`.
-4.  Make a `POST /invoices/pay/{invoice_id}` request from your **backend server** with the payer's auth headers.
+4.  Make a `POST /invoices/{invoice_id}/pay` request from your **backend server** with the payer's auth headers.
 5.  **Handle the response:**
     *   `200 OK`: Invoice paid successfully. Record the `nano_block_hash`.
     *   `429 Too Many Requests`: Another operation was in progress *for the payer's wallet*. Wait and retry.
@@ -398,12 +455,12 @@ curl http://localhost:8000/accounts/nano_3i1aq1cchnmbn9x5rsbap8b15akfh7wj7pwskuz
 
 **Create New Wallet (curl):**
 ```bash
-curl -X POST http://localhost:8000/wallet/create
+curl -X POST http://localhost:8000/wallets
 ```
 
 Or with a specific index:
 ```bash
-curl -X POST "http://localhost:8000/wallet/create?index=5"
+curl -X POST "http://localhost:8000/wallets?index=5"
 ```
 
 Response:
@@ -425,7 +482,7 @@ DEST_ADDR="nano_1..."
 curl -X POST http://localhost:8000/wallet/send \
   -H "Content-Type: application/json" \
   -H "X-Wallet-Private-Key: ${SECRET_NANO_KEY}" \
-  -d "{\"destination_address\": \"${DEST_ADDR}\", \"amount_nano\": 0.01}"
+  -d "{\"destination_address\": \"${DEST_ADDR}\", \"amount\": \"0.01\", \"currency\": \"NANO\"}"
 ```
 
 **Send 10 EUR worth of XNO via Seed/Index (curl - ⚠️ DANGEROUS if seed exposed! Use only in secure backend scripts):**
@@ -439,7 +496,7 @@ curl -X POST http://localhost:8000/wallet/send \
   -H "Content-Type: application/json" \
   -H "X-Wallet-Seed: ${SECRET_NANO_SEED}" \
   -H "X-Wallet-Index: ${WALLET_IDX}" \
-  -d "{\"destination_address\": \"${DEST_ADDR}\", \"nominal_amount\": 10.00, \"nominal_currency\": \"EUR\"}"
+  -d "{\"destination_address\": \"${DEST_ADDR}\", \"amount\": \"10.00\", \"currency\": \"EUR\"}"
 ```
 
 **Send Nano with Retry on 429 (Python - Backend Example):**
@@ -468,7 +525,8 @@ headers = {
 }
 payload = {
     "destination_address": DESTINATION_ADDRESS,
-    "amount_nano": float(AMOUNT_TO_SEND_NANO) # JSON needs float/str
+    "amount": str(AMOUNT_TO_SEND_NANO),
+    "currency": "NANO",
 }
 
 retry_count = 0
@@ -514,14 +572,14 @@ if retry_count == MAX_RETRIES:
 
 ```
 
-**(Python example for paying an invoice would be similar, calling `POST /invoices/pay/{id}` and handling 429)**
+**(Python example for paying an invoice would be similar, calling `POST /invoices/{id}/pay` and handling 429)**
 
 ---
 
 ## 8. Security Considerations
 
 *   **🚨 KEY SECURITY IS PARAMOUNT 🚨:** The `X-Wallet-Private-Key` and `X-Wallet-Seed` headers ARE effectively your Nano private keys or seeds. **Their compromise means the IMMEDIATE AND IRREVERSIBLE LOSS OF FUNDS** associated with them. Protect these values with the highest level of security. Do NOT hardcode them in source control, log them, or expose them in any insecure manner. Use secure secret management practices (environment variables on secure servers, dedicated secret managers).
-*   **🔒 BACKEND ONLY:** Authenticated API calls (`/wallet/*`, `/invoices/pay/*`) **MUST** originate exclusively from your secure, trusted backend server environment. **NEVER** make these calls directly from client-side code (JavaScript in browsers, mobile apps) as this inevitably exposes your keys/seeds.
+*   **🔒 BACKEND ONLY:** Authenticated API calls (`/wallet/*`, `/invoices/{invoice_id}/pay`) **MUST** originate exclusively from your secure, trusted backend server environment. **NEVER** make these calls directly from client-side code (JavaScript in browsers, mobile apps) as this inevitably exposes your keys/seeds.
 *   **🔐 HTTPS/TLS:** Deploying this API behind HTTPS is **MANDATORY**. Failure to do so transmits your sensitive keys/seeds in plaintext over the network, making them trivial to intercept.
 *   ** INPUT VALIDATION:** While the API performs validation, your application should also validate inputs (addresses, amounts) before sending them to the API as a best practice.
 *   **🚦 RATE LIMITING (API Level):** Implement robust rate limiting on the API server itself (e.g., using middleware in FastAPI) to prevent denial-of-service attacks and general abuse, independent of the per-wallet concurrency locking.
